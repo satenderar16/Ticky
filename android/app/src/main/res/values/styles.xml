@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is off -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <!-- Show a splash screen on the activity. Automatically removed when
+             the Flutter engine draws its first frame -->
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+        <!-- <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item> -->
+    </style>
+</resources>
+
+
+
+
+
+
+
+<!-- 
+MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "window_flags")
+    .setMethodCallHandler { call, result ->
+        try {
+            if (call.method == "setFlags") {
+                val flags = call.argument<List<Int>>("flags") ?: emptyList()
+                val enable = call.argument<Boolean>("enable") ?: false
+
+                val statusBarColor = (call.argument<Number?>("statusBarColor"))?.toInt()
+                val navigationBarColor = (call.argument<Number?>("navigationBarColor"))?.toInt()
+                val transparentBars = call.argument<Boolean>("transparentBars") ?: false
+                val windowBackgroundColor = (call.argument<Number?>("windowBackgroundColor"))?.toInt()
+
+                // Debug log
+                Log.d("WindowFlags", "flags=$flags, enable=$enable")
+                Log.d("WindowFlags", "statusBarColor=$statusBarColor, navigationBarColor=$navigationBarColor")
+                Log.d("WindowFlags", "transparentBars=$transparentBars, windowBgColor=$windowBackgroundColor")
+
+                // Apply flags
+                flags.forEach { flag ->
+                    if (enable) window.addFlags(flag) else window.clearFlags(flag)
+                }
+
+                // Apply window background color
+                windowBackgroundColor?.let {
+                    window.setBackgroundDrawable(ColorDrawable(it))
+                }
+
+                // Transparent bars handling
+                if (transparentBars) {
+                    window.decorView.systemUiVisibility = (
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    )
+                    window.statusBarColor = Color.TRANSPARENT
+                    window.navigationBarColor = Color.TRANSPARENT
+                } else {
+                    statusBarColor?.let { window.statusBarColor = it }
+                    navigationBarColor?.let { window.navigationBarColor = it }
+                }
+
+                result.success(null)
+            } else {
+                result.notImplemented()
+            }
+        } catch (e: Exception) {
+            result.error("WINDOW_FLAGS_ERROR", e.localizedMessage, null)
+        }
+    } -->
