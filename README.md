@@ -1,16 +1,24 @@
-# quthon
+# Ticky
 
-A new Flutter project.
+A modern Flutter application designed for performance and scalability.
+
+## 📱 Preview
+
+| SignIn | HomePage | Features | LeaderBoard | Scorecard |
+| :---: | :---: | :---: | :---:| :---: |
+<img src="./assets/demo_images/Screenshot_1778063788.png" width="250"> |<img src="./assets/demo_images/Screenshot_1778052370.png" width="250"> |<img src="./assets/demo_images/Screenshot_1778052349.png" width="250">| <img src="./assets/demo_images/Screenshot_1778054620.png" width="250"> | <img src="./assets/demo_images/Screenshot_1778054646.png" width="250"> | 
+
+---
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+Follow these instructions to get a copy of the project up and running on your local machine for development and testing.
 
-A few resources to get you started if this is your first Flutter project:
+### 1. Clone the Repository
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+First, clone the project from GitHub and navigate into the directory:
+```bash
+git clone https://github.com/yourusername/quthon.git
+cd quthon
+flutter pub get
+flutter run 
