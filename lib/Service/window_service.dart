@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+// might never gonna use but let it be:
 
 enum WindowFlag {
   FLAG_SECURE,

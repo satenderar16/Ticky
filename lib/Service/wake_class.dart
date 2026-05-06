@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+// TODO when this serve for multiple plaform we replace this the multidevice functionality:
+
 class WakeClass {
   static const MethodChannel _channel = MethodChannel(
     'com.environ.quthon/wake',

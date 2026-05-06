@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 /// Custom HTTP exception with full error context
@@ -37,12 +38,15 @@ class HttpException implements Exception {
 
 /// HTTP Manager
 class HttpManager {
-  static final http.Client client = http.Client(); // Global singleton client
+  static http.Client client = http.Client(); // Global singleton client
+  static final FlutterSecureStorage storage = const FlutterSecureStorage();
   final Duration timeout;
   final bool skipAuthHeader;
+  static const String httpFallback = 'Http Wrong Status Code in Repo:';
   final Future<DateTime?> Function()? refreshFunction;
 
   late final String apiBaseUrl;
+  final String _accessKey = 'access_token';
 
   HttpManager({
     this.timeout = const Duration(seconds: 8),
@@ -59,101 +63,118 @@ class HttpManager {
         apiUrl.endsWith('/') ? apiUrl.substring(0, apiUrl.length - 1) : apiUrl;
   }
 
-  /// Build headers (merge default + custom headers)
+  /// Build headers (merge default + custom headers)// as this could
   Future<Map<String, String>> _buildHeaders([
     Map<String, String>? headers,
   ]) async {
-    final defaultHeaders = {
+    String? token;
+    try {
+      token = skipAuthHeader ? null : await storage.read(key: _accessKey);
+    } catch (e) {
+      token = null;
+    }
+    return {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+      if (headers != null) ...headers,
     };
-
-    if (headers != null) {
-      defaultHeaders.addAll(headers);
-    }
-
-    return defaultHeaders;
   }
 
   /// Unified request handler with optional token refresh on 401
   Future<http.Response> _request(
     Future<http.Response> Function(Map<String, String> headersEx) fn,
   ) async {
-    try {
-      var headers = await _buildHeaders();
-      var response = await fn(headers).timeout(timeout);
-
-      // success Return response:
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return response;
-      }
-      String? serverMessage;
-      // Handle 401 with token refresh and retry once
-
-      if (response.statusCode == 401 && refreshFunction != null) {
-        debugPrint('refresh is calling in the httpManager');
-        final access = await refreshFunction!();
-        if (access == null) {
-          throw Exception(
-            'After refreshing session, access token found to be null',
-          );
+    bool retried = false;
+    Future<http.Response> run() async {
+      try {
+        var headers = await _buildHeaders();
+        var response = await fn(headers).timeout(timeout);
+        // debugPrint(response.body.toString());
+        // debugPrint(response.statusCode.toString());
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          return response;
         }
-        headers = await _buildHeaders();
-        response = await fn(headers).timeout(timeout);
-      }
-      // debugPrint(response.statusCode.toString());
+        String? serverMessage;
+        // Handle 401 with token refresh and retry once
 
-      // debugPrint(response.body);
-      if (response.statusCode == 404) {
+        if (response.statusCode == 401 && refreshFunction != null) {
+          // this ensure any kind of erorr in refreshTken call the refeshFunction:
+
+          await refreshFunction!();
+
+          headers = await _buildHeaders();
+          return await fn(headers).timeout(timeout);
+        }
+        // debugPrint(response.statusCode.toString());
+
+        // if (response.statusCode == 404) {
+        //   throw http.ClientException(
+        //     'Not Found',
+        //     Uri.parse(response.request?.url.toString() ?? 'unknown'),
+        //   );
+        // }
+
+        // Try to extract "detail" message from the response body
+        // debugPrint(response.body);
+        try {
+          final body = jsonDecode(response.body);
+          debugPrint(body.toString());
+          if (body is Map<String, dynamic> && body['detail'] is String) {
+            serverMessage = body['detail'];
+          }
+        } catch (_) {
+          // ignore non-JSON bodies
+        }
+
+        // Fallback message
+        String message = serverMessage ?? 'Unknown Network Error';
+
         throw http.ClientException(
-          'Not Found',
+          message,
           Uri.parse(response.request?.url.toString() ?? 'unknown'),
         );
-      }
-
-      // Try to extract "detail" message from the response body
-
-      try {
-        final body = jsonDecode(response.body);
-        if (body is Map<String, dynamic> && body['detail'] is String) {
-          serverMessage = body['detail'];
+      } on HandshakeException catch (e) {
+        debugPrint('handshake exception found:');
+        if (!retried) {
+          retried = true;
+          client.close();
+          client = http.Client();
+          return await run(); // retry once
         }
-      } catch (_) {
-        // ignore non-JSON bodies
-      }
 
-      // Fallback message
-      String message = serverMessage ?? 'Check your network';
-      if (message.contains('Not Found')) message = 'Something Wrong';
-      //  Throw a ClientException including code and detail
-      throw http.ClientException(
-        message,
-        Uri.parse(response.request?.url.toString() ?? 'unknown'),
-      );
-    } on SocketException catch (e, st) {
-      throw HttpException(
-        'No internet connection',
-        originalError: e,
-        stackTrace: st,
-      );
-    } on TimeoutException catch (e, st) {
-      throw HttpException(
-        'Taking too long... Try again',
-        originalError: e,
-        stackTrace: st,
-      );
-    } on http.ClientException catch (e, st) {
-      throw HttpException(e.message, originalError: e, stackTrace: st);
-    } catch (e) {
-      throw 'Something went wrong';
+        throw HttpException("Please Try again. Later", originalError: e);
+      } on SocketException catch (e, st) {
+        throw HttpException(
+          'No internet connection',
+          originalError: e,
+          stackTrace: st,
+        );
+      } on TimeoutException catch (e, st) {
+        throw HttpException(
+          'Request timeout',
+          originalError: e,
+          stackTrace: st,
+        );
+      } on http.ClientException catch (e, st) {
+        throw HttpException(e.message, originalError: e, stackTrace: st);
+      } catch (e) {
+        if (e.toString().contains('Session Expire')) {
+          throw 'Session expired. Please login Again';
+        }
+        if (e.toString().contains('Refresh')) {
+          throw 'Something went wrong';
+        }
+        rethrow;
+      }
     }
+
+    return await run();
   }
 
   // h -> default header build by _buildheader:
   Future<http.Response> get(Uri uri, {Map<String, String>? headers}) =>
-      _request((h) async {
-        return client.get(uri, headers: {...h, ...?headers});
-      });
+      _request((h) => client.get(uri, headers: {...h, ...?headers}));
 
   Future<http.Response> post(
     Uri uri, {
@@ -161,6 +182,14 @@ class HttpManager {
     Object? body,
   }) => _request(
     (h) => client.post(uri, headers: {...h, ...?headers}, body: body),
+  );
+
+  Future<http.Response> patch(
+    Uri uri, {
+    Map<String, String>? headers,
+    Object? body,
+  }) => _request(
+    (h) => client.patch(uri, headers: {...h, ...?headers}, body: body),
   );
 
   Future<http.Response> put(

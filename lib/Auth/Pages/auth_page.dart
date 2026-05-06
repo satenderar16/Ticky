@@ -3,13 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:quthon/Auth/auth_notifier.dart';
-// import 'package:intl/intl.dart';
-import 'package:quthon/Auth/auth_provider.dart';
-// import 'package:quthon/Auth/auth_state.dart';
-// import 'package:quthon/Auth/auth_state.dart';
-// import 'package:quthon/Auth/user_model.dart';
-import 'package:quthon/Contest/contest_live.dart';
-import 'package:quthon/Widgets/utils.dart';
+import 'package:quthon/Auth/user_model.dart';
+import 'package:quthon/Contest/contest_notifier.dart';
+import 'package:quthon/DashBoard/RegistrationPage/participated_notifier.dart';
+import 'package:quthon/DashBoard/dashboard.dart';
+import 'package:quthon/Utilies/current_contest_provider.dart';
+import 'package:quthon/Widgets/animations.dart';
 import 'package:quthon/Widgets/widgets.dart';
 
 // consider it Home route:
@@ -20,66 +19,42 @@ class AuthPage extends ConsumerStatefulWidget {
   ConsumerState<AuthPage> createState() => _AuthPageState();
 }
 
-class _AuthPageState extends ConsumerState<AuthPage>
-    with WidgetsBindingObserver {
+class _AuthPageState extends ConsumerState<AuthPage> {
   // helps in resycn the time when user uses difference services:
   @override
   void initState() {
-    WidgetsBinding.instance.addObserver(this);
-
     super.initState();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) async {
-    if (state == AppLifecycleState.paused) {
-      debugPrint("app state is paused");
-    }
-    if (state == AppLifecycleState.inactive) {
-      debugPrint("app state is inactive");
-    }
-    if (state == AppLifecycleState.resumed &&
-        ref.read(authNotifierProvider) != AuthState.unauthenticated()) {
-      debugPrint("app state is resumed:");
-      await ref.read(authNotifierProvider.notifier).reSyncScheduleRefresh();
-    }
   }
 
   bool _hasShownDialog = false;
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authNotifierProvider);
-    if (authState.sessionExpired != null && !_hasShownDialog) {
+    if (authState.sessionExpired == AuthSession.expired && !_hasShownDialog) {
       _hasShownDialog = true;
       Future.microtask(() {
         if (context.mounted) sessionExpiryDailog(context, ref);
       });
     }
+    if (authState.sessionExpired == AuthSession.none ||
+        authState.sessionExpired == AuthSession.expired) {
+      Future.microtask(() {
+        ref.invalidate(contestProvider);
+        ref.invalidate(participateProvider);
+      });
+    }
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (!didPop) {
-          final shouldExit = await _showExitBottomSheet(context);
-          if (shouldExit) {
-            // Actually exit the app
-            SystemNavigator.pop();
-          }
-        }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        return FadeTransition(opacity: animation, child: child);
       },
-
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 400),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        transitionBuilder: (Widget child, Animation<double> animation) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-        child:
-            authState.isAuthenticated
-                ? ContestLive(key: ValueKey('contestLive'))
-                : const AuthBody(key: ValueKey('authbody')),
-      ),
+      child:
+          authState.isAuthenticated
+              ? const Dashboard()
+              : const AuthBody(key: ValueKey('authbody')),
     );
   }
 
@@ -155,11 +130,98 @@ class _AuthPageState extends ConsumerState<AuthPage>
       },
     );
   }
+}
+
+/// --------------------
+/// PARENT AUTH SCREEN: CONTAIN LOGIN AND SIGN WIDGETS:
+/// --------------------
+///
+///
+///
+
+class AuthBody extends StatefulWidget {
+  const AuthBody({super.key});
+
+  @override
+  State<AuthBody> createState() => _AuthBodyState();
+}
+
+class _AuthBodyState extends State<AuthBody> {
+  bool isLogin = true;
+  bool isLoading = false;
+  void toggleLoading(bool value) {
+    setState(() {
+      isLoading = value;
+    });
+  }
+
+  void switchForm(bool toLogin) {
+    if (toLogin == isLogin) return;
+    setState(() {
+      isLogin = toLogin;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (!didPop) {
+          final shouldExit = await _showExitBottomSheet(context);
+          if (shouldExit) {
+            // Actually exit the app
+            SystemNavigator.pop();
+          }
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(isLogin ? 'Sign In' : 'Sign Up'),
+          clipBehavior: Clip.antiAlias,
+          scrolledUnderElevation: 4,
+          surfaceTintColor: colorScheme.surfaceContainer,
+
+          backgroundColor: colorScheme.surfaceContainerLowest,
+
+          shadowColor: colorScheme.scrim.withAlpha(40),
+        ),
+        body: SafeArea(
+          bottom: false,
+          top: false,
+          left: true,
+          right: true,
+
+          child: Stack(
+            children: [
+              Align(
+                alignment: AlignmentGeometry.bottomCenter,
+                child: AppBottomLogoTile(),
+              ),
+              Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: 400),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child:
+                        isLogin
+                            ? LoginForm(switchForm: switchForm)
+                            : SignupForm(switchForm: switchForm),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Future<bool> _showExitBottomSheet(BuildContext context) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
-      barrierColor: Colors.transparent,
+      barrierColor: Colors.black12,
       backgroundColor: Theme.of(
         context,
       ).colorScheme.surfaceContainerLowest.withAlpha(0),
@@ -231,157 +293,11 @@ class _AuthPageState extends ConsumerState<AuthPage>
 
     return result ?? false; // false = do not exit
   }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
 }
 
-/// --------------------
-/// PARENT AUTH SCREEN
-/// --------------------
-class AuthBody extends StatefulWidget {
-  const AuthBody({super.key});
-
-  @override
-  State<AuthBody> createState() => _AuthBodyState();
-}
-
-class _AuthBodyState extends State<AuthBody> {
-  bool isLogin = true;
-  bool isLoading = false;
-  void toggleLoading(bool value) {
-    setState(() {
-      isLoading = value;
-    });
-  }
-
-  void switchForm(bool toLogin) {
-    setState(() {
-      isLogin = toLogin;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final mediaPadding = MediaQuery.paddingOf(context);
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: colorScheme.surfaceContainerLowest.withAlpha(0),
-        surfaceTintColor: colorScheme.surfaceContainerLowest.withAlpha(0),
-        flexibleSpace: Align(
-          alignment: AlignmentGeometry.bottomCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: 350),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: isLoading ? null : () => switchForm(true),
-                    child: StyledContainer(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      border:
-                          isLogin
-                              ? null
-                              : Border.fromBorderSide(BorderSide.none),
-                      boxShadow: isLogin ? null : [],
-                      child: Text(
-                        "Login",
-                        style: TextTheme.of(context).labelLarge?.copyWith(
-                          color:
-                              isLogin
-                                  ? colorScheme.primary
-                                  : colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                ),
-
-                Expanded(
-                  child: GestureDetector(
-                    onTap: isLoading ? null : () => switchForm(false),
-                    child: StyledContainer(
-                      boxShadow: isLogin ? [] : null,
-                      border:
-                          !isLogin
-                              ? null
-                              : Border.fromBorderSide(BorderSide.none),
-                      padding: const EdgeInsets.all(12),
-
-                      child: Text(
-                        "Signup",
-                        textAlign: TextAlign.center,
-                        style: TextTheme.of(context).labelLarge?.copyWith(
-                          color:
-                              !isLogin
-                                  ? colorScheme.primary
-                                  : colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-
-      body: Center(
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.only(
-                  top: 12,
-                  left: 12,
-                  right: 12,
-                  bottom: mediaPadding.bottom + 12,
-                ),
-                child: StyledContainer(
-                  padding: EdgeInsetsGeometry.only(
-                    left: 12,
-                    right: 12,
-                    top: 12,
-                    bottom: 0,
-                  ),
-                  child: AnimatedCrossFade(
-                    duration: const Duration(milliseconds: 300),
-                    firstChild: LoginForm(isLoading: toggleLoading),
-                    secondChild: SignupForm(isLoading: toggleLoading),
-                    crossFadeState:
-                        isLogin
-                            ? CrossFadeState.showFirst
-                            : CrossFadeState.showSecond,
-                    sizeCurve: Curves.easeInOut,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// --------------------
-/// LOGIN FORM
-/// --------------------
 class LoginForm extends ConsumerStatefulWidget {
-  final void Function(bool) isLoading;
-  const LoginForm({super.key, required this.isLoading});
+  final void Function(bool) switchForm;
+  const LoginForm({super.key, required this.switchForm});
 
   @override
   ConsumerState<LoginForm> createState() => _LoginFormState();
@@ -395,14 +311,14 @@ class _LoginFormState extends ConsumerState<LoginForm> {
 
   String? emailOrUsernameError;
   String? passwordError;
-  String? globalError;
+  String? globalError; // usi
 
   bool isEmail(String input) {
     final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
     return emailRegex.hasMatch(input.trim());
   }
 
-  Future<void> handleLogin() async {
+  Future<String?> handleLogin() async {
     setState(() {
       emailOrUsernameError = null;
       passwordError = null;
@@ -414,11 +330,11 @@ class _LoginFormState extends ConsumerState<LoginForm> {
 
     if (input.isEmpty) {
       setState(() => emailOrUsernameError = "Enter email or username");
-      return;
+      return null;
     }
     if (password.isEmpty) {
       setState(() => passwordError = "Enter password");
-      return;
+      return null;
     }
 
     final isInputEmail = isEmail(input);
@@ -426,31 +342,31 @@ class _LoginFormState extends ConsumerState<LoginForm> {
     final username = isInputEmail ? null : input;
 
     setState(() {
-      widget.isLoading(true);
       isLoading = true;
     });
 
     try {
-      debugPrint('$email $username $password');
-      await Future.delayed(Duration(seconds: 2));
-      ;
       await ref
           .read(authNotifierProvider.notifier)
           .signIn(email: email, username: username, password: password);
     } catch (e) {
       final errorMsg = e.toString().toLowerCase();
       if (errorMsg.contains("password")) {
-        setState(() => passwordError = "Incorrect password.");
+        setState(() => passwordError = "Incorrect password");
+        // throw 'Incorrect password';
       } else if (errorMsg.contains("user")) {
-        setState(() => emailOrUsernameError = "User not found.");
+        setState(() => emailOrUsernameError = "User not found");
+        // throw 'User not found';
       } else {
-        setState(() => globalError = "Login failed. Please try again.");
+        setState(() => globalError = e.toString());
       }
+      // return null;
     } finally {
-      setState(() {
-        widget.isLoading(false);
-        isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
     }
   }
 
@@ -464,75 +380,144 @@ class _LoginFormState extends ConsumerState<LoginForm> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = TextTheme.of(context);
+    final mediaPadding = MediaQuery.paddingOf(context);
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: 700),
-      child: Column(
-        key: const ValueKey('loginForm'),
+    return Center(
+      child: ListView(
+        shrinkWrap: true,
+        physics: const BouncingScrollPhysics(),
         children: [
-          SizedBox(height: 10),
-          CustomTextFormField(
-            controller: emailOrUsernameController,
-            label: 'Email or Username',
-            enabled: !isLoading,
-            errorText: emailOrUsernameError,
-          ),
-
-          const SizedBox(height: 12),
-          CustomTextFormField(
-            controller: passwordController,
-            label: 'Password',
-            enabled: !isLoading,
-            errorText: passwordError,
-            obscureText: !isPasswordVisible,
-            suffixIcon: IconButton(
-              icon: Icon(
-                !isPasswordVisible
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
-              ),
-              onPressed:
-                  () => setState(() => isPasswordVisible = !isPasswordVisible),
+          Padding(
+            padding: EdgeInsets.only(
+              top: 12,
+              left: 12,
+              right: 12,
+              bottom: mediaPadding.bottom + 12,
             ),
-          ),
-
-          const SizedBox(height: 16),
-          if (globalError != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                globalError!,
-                style: TextStyle(color: colorScheme.error),
+            child: StyledContainer(
+              padding: EdgeInsetsGeometry.only(
+                left: 12,
+                right: 12,
+                top: 12,
+                bottom: 0,
               ),
-            ),
-          CupertinoButton(
-            padding: const EdgeInsets.all(0),
-            onPressed: isLoading ? null : handleLogin,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 300),
-              child: SizedBox(
-                width: double.infinity,
-                child: StyledContainer(
-                  margin: EdgeInsetsGeometry.only(bottom: 24),
-                  offset: Offset(0, 12),
-                  child: Center(
-                    child:
-                        isLoading
-                            ? SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(
-                                strokeCap: StrokeCap.round,
-                                strokeWidth: 2,
-                              ),
-                            )
-                            : Text(
-                              'Login',
-                              style: TextTheme.of(context).labelLarge?.copyWith(
-                                color: colorScheme.primary,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: 400),
+                child: Column(
+                  key: const ValueKey('loginForm'),
+                  children: [
+                    // SizedBox(height: 50),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 20),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: 130,
+                          maxWidth: 130,
+                        ),
+                        child: Image.asset('./assets/sign_in.png'),
+                      ),
+                    ),
+
+                    SizedBox(height: 30),
+                    CustomTextFormField(
+                      controller: emailOrUsernameController,
+                      label: 'Email or Username',
+                      enabled: !isLoading,
+                      errorText: emailOrUsernameError,
+                    ),
+                    const SizedBox(height: 10),
+                    CustomTextFormField(
+                      controller: passwordController,
+                      label: 'Password',
+                      enabled: !isLoading,
+                      errorText: passwordError,
+                      obscureText: !isPasswordVisible,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          !isPasswordVisible
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                        ),
+                        onPressed:
+                            () => setState(
+                              () => isPasswordVisible = !isPasswordVisible,
+                            ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 40),
+                    AnimatedUpDown(
+                      active: globalError != null,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 4.0),
+                        child: Text(
+                          globalError ?? 'Something went wrong',
+                          style: TextStyle(color: colorScheme.error),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: 300),
+                        child: SizedBox(
+                          width: double.maxFinite,
+                          child: CustomBottomButton(
+                            onPressed: isLoading ? null : handleLogin,
+                            child:
+                                isLoading
+                                    ? Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      spacing: 4,
+                                      children: [
+                                        ThreeDotWave(dotSize: 4, amplitude: .5),
+
+                                        Flexible(
+                                          child: Text(
+                                            'loading',
+                                            style: TextStyle(
+                                              color: colorScheme.outline,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                    : Text('Sign In'),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                    Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            'don\'t have account? ',
+                            style: TextTheme.of(context).bodySmall,
+                          ),
+                          GestureDetector(
+                            onTap:
+                                isLoading
+                                    ? null
+                                    : () => widget.switchForm(false),
+                            child: Container(
+                              padding: EdgeInsets.symmetric(horizontal: 4.0),
+                              color: Colors.transparent,
+                              child: Text(
+                                'Signup',
+                                style: TextTheme.of(context).labelLarge
+                                    ?.copyWith(color: colorScheme.secondary),
                               ),
                             ),
-                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -547,8 +532,8 @@ class _LoginFormState extends ConsumerState<LoginForm> {
 /// SIGNUP FORM
 /// --------------------
 class SignupForm extends ConsumerStatefulWidget {
-  final void Function(bool) isLoading;
-  const SignupForm({super.key, required this.isLoading});
+  final void Function(bool) switchForm;
+  const SignupForm({super.key, required this.switchForm});
 
   @override
   ConsumerState<SignupForm> createState() => _SignupFormState();
@@ -578,7 +563,7 @@ class _SignupFormState extends ConsumerState<SignupForm> {
     return emailRegex.hasMatch(input.trim());
   }
 
-  Future<void> handleSignup() async {
+  Future<String?> handleSignup() async {
     setState(() {
       firstNameError = null;
       lastNameError = null;
@@ -596,36 +581,36 @@ class _SignupFormState extends ConsumerState<SignupForm> {
 
     if (firstName.isEmpty) {
       setState(() => firstNameError = "Enter first name");
-      return;
+      return null;
     }
     if (lastName.isEmpty) {
       setState(() => lastNameError = "Enter last name");
-      return;
+      return null;
     }
     if (email.isEmpty || !isEmail(email)) {
       setState(() => emailError = "Enter valid email");
-      return;
+      return null;
     }
     if (password.isEmpty) {
       setState(() => passwordError = "Enter password");
-      return;
+      return null;
     }
     if (confirmPassword.isEmpty) {
       setState(() => confirmPasswordError = "Confirm your password");
-      return;
+      return null;
     }
     if (password != confirmPassword) {
       setState(() => confirmPasswordError = "Passwords do not match");
-      return;
+      return null;
     }
 
     setState(() {
-      widget.isLoading(true);
       isLoading = true;
     });
 
     try {
-      final user = await ref
+      // final user =
+      await ref
           .read(authNotifierProvider.notifier)
           .signUp(
             firstName: firstName,
@@ -633,18 +618,31 @@ class _SignupFormState extends ConsumerState<SignupForm> {
             email: email,
             password: password,
           );
-      if (user == null) throw "Signup failed";
 
-      await ref
-          .read(authNotifierProvider.notifier)
-          .signIn(email: email, password: password);
+      // if (user == null) throw "Signup failed";
+
+      // await refs
+      //     .read(authNotifierProvider.notifier)
+      //     .signIn(email: email, password: password);
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Login with Email and password'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     } catch (e) {
+      if (!mounted) return null;
+      // this can be updated as when error is about username is already exit or something like this:
       setState(() => globalError = e.toString());
     } finally {
-      setState(() {
-        widget.isLoading(false);
-        isLoading = false;
-      });
+      // here we can use break:
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
     }
   }
 
@@ -661,113 +659,166 @@ class _SignupFormState extends ConsumerState<SignupForm> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = TextTheme.of(context);
+    final mediaPadding = MediaQuery.paddingOf(context);
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: 700),
-      child: Column(
-        key: const ValueKey('signupForm'),
+    return Center(
+      child: ListView(
+        shrinkWrap: true,
+        physics: const BouncingScrollPhysics(),
         children: [
-          const SizedBox(height: 10),
-          CustomTextFormField(
-            controller: firstNameController,
-            label: 'First Name',
-            enabled: !isLoading,
-            errorText: firstNameError,
-          ),
-
-          const SizedBox(height: 12),
-          CustomTextFormField(
-            controller: lastNameController,
-            label: 'Last Name',
-            enabled: !isLoading,
-            errorText: lastNameError,
-          ),
-
-          const SizedBox(height: 12),
-          CustomTextFormField(
-            controller: emailController,
-            label: 'Email',
-            enabled: !isLoading,
-            errorText: emailError,
-            keyboardType: TextInputType.emailAddress,
-          ),
-
-          const SizedBox(height: 12),
-          CustomTextFormField(
-            controller: passwordController,
-            label: 'Password',
-            enabled: !isLoading,
-            errorText: passwordError,
-            obscureText: !isPasswordVisible,
-            suffixIcon: IconButton(
-              icon: Icon(
-                !isPasswordVisible
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
-              ),
-              onPressed:
-                  () => setState(() => isPasswordVisible = !isPasswordVisible),
+          Padding(
+            padding: EdgeInsets.only(
+              top: 12,
+              left: 12,
+              right: 12,
+              bottom: mediaPadding.bottom + 12,
             ),
-          ),
-
-          const SizedBox(height: 12),
-          CustomTextFormField(
-            controller: confirmPasswordController,
-            label: 'Confirm Password',
-            enabled: !isLoading,
-
-            errorText: confirmPasswordError,
-            obscureText: !isConfirmPasswordVisible,
-            suffixIcon: IconButton(
-              icon: Icon(
-                !isConfirmPasswordVisible
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
+            child: StyledContainer(
+              padding: EdgeInsetsGeometry.only(
+                left: 12,
+                right: 12,
+                top: 12,
+                bottom: 0,
               ),
-              onPressed:
-                  () => setState(
-                    () => isConfirmPasswordVisible = !isConfirmPasswordVisible,
-                  ),
-            ),
-          ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: 700),
+                child: Column(
+                  key: const ValueKey('signupForm'),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: 160,
+                          maxWidth: 160,
+                        ),
+                        child: Image.asset('./assets/sign_up.png'),
+                      ),
+                    ),
 
-          const SizedBox(height: 16),
-          if (globalError != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                globalError!,
-                style: TextStyle(color: colorScheme.error),
-              ),
-            ),
-          CupertinoButton(
-            padding: const EdgeInsets.all(0),
-            onPressed: isLoading ? null : handleSignup,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 300),
-              child: SizedBox(
-                width: double.infinity,
-                child: StyledContainer(
-                  margin: EdgeInsetsGeometry.only(bottom: 24),
-                  offset: Offset(0, 12),
-                  child: Center(
-                    child:
-                        isLoading
-                            ? SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(
-                                strokeCap: StrokeCap.round,
-                                strokeWidth: 2,
-                              ),
-                            )
-                            : Text(
-                              'SignUp',
-                              style: TextTheme.of(context).labelLarge?.copyWith(
-                                color: colorScheme.primary,
+                    const SizedBox(height: 10),
+                    CustomTextFormField(
+                      controller: firstNameController,
+                      label: 'First Name',
+                      enabled: !isLoading,
+                      errorText: firstNameError,
+                    ),
+
+                    const SizedBox(height: 12),
+                    CustomTextFormField(
+                      controller: lastNameController,
+                      label: 'Last Name',
+                      enabled: !isLoading,
+                      errorText: lastNameError,
+                    ),
+
+                    const SizedBox(height: 12),
+                    CustomTextFormField(
+                      controller: emailController,
+                      label: 'Email',
+                      enabled: !isLoading,
+                      errorText: emailError,
+                      keyboardType: TextInputType.emailAddress,
+                    ),
+
+                    const SizedBox(height: 12),
+                    CustomTextFormField(
+                      controller: passwordController,
+                      label: 'Password',
+                      enabled: !isLoading,
+                      errorText: passwordError,
+                      obscureText: !isPasswordVisible,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          !isPasswordVisible
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                        ),
+                        onPressed:
+                            () => setState(
+                              () => isPasswordVisible = !isPasswordVisible,
+                            ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    CustomTextFormField(
+                      controller: confirmPasswordController,
+                      label: 'Confirm Password',
+                      enabled: !isLoading,
+
+                      errorText: confirmPasswordError,
+                      obscureText: !isConfirmPasswordVisible,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          !isConfirmPasswordVisible
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                        ),
+                        onPressed:
+                            () => setState(
+                              () =>
+                                  isConfirmPasswordVisible =
+                                      !isConfirmPasswordVisible,
+                            ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 30),
+                    AnimatedUpDown(
+                      active: globalError != null,
+                      child: Text(
+                        globalError ?? 'Something went wrong',
+                        style: TextStyle(color: colorScheme.error),
+                      ),
+                    ),
+
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: 300),
+                        child: AsyncButton(
+                          showResponse: false,
+                          needContinue: false,
+                          onPressedAsync: handleSignup,
+                          childText: 'Sign up',
+                          // this will handle the sign error or successs to update ui send snackbar:
+                          onResult: (result) => debugPrint(result.toString()),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                    Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Already have account? ',
+                            style: TextTheme.of(context).bodySmall,
+                          ),
+                          GestureDetector(
+                            onTap:
+                                isLoading
+                                    ? null
+                                    : () => widget.switchForm(true),
+                            child: Container(
+                              padding: EdgeInsets.symmetric(horizontal: 4.0),
+                              color: Colors.transparent,
+                              child: Text(
+                                'Sign In',
+                                style: TextTheme.of(context).labelLarge
+                                    ?.copyWith(color: colorScheme.secondary),
                               ),
                             ),
-                  ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -816,8 +867,6 @@ class CustomTextFormField extends StatelessWidget {
       decoration: InputDecoration(
         labelText: label,
         errorText: errorText,
-
-        // filled: true,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
         enabledBorder: OutlineInputBorder(
           borderSide: BorderSide(color: colorScheme.surfaceContainer),

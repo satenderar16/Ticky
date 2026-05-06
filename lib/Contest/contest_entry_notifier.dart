@@ -5,12 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:quthon/Contest/contest_model.dart';
 import 'package:quthon/Contest/contest_notifier.dart';
-import 'package:quthon/Contest/contest_repository.dart';
+import 'package:quthon/DashBoard/RegistrationPage/participated_notifier.dart';
+import 'package:quthon/Models/register_models.dart';
+import 'package:quthon/Repository/contest_repository.dart';
 import 'package:quthon/Models/answer_model.dart';
 import 'package:quthon/Models/question_model.dart';
 import 'package:quthon/Service/brightness_service.dart';
 import 'package:quthon/Service/dnd_service.dart';
-import 'package:quthon/Service/pinn_service.dart';
+import 'package:quthon/Utilies/current_contest_provider.dart';
 
 /// ---------- 1. Global clock ----------
 /// we can optimize this to have adaptive periodic timer like for duration about in multiples minutes we can only update the clock for duration of 1min for less time we use seconds.
@@ -55,7 +57,7 @@ enum ContestSubmission { none, submit, timeOutSumit, interrupted }
 /// ---------- 2. Contest Entry State ----------
 class ContestEntryState {
   final ContestDetailModel contest;
-  final List<Question> questions;
+  final List<ContestQuestion> questions;
   final int currentIndex;
   final bool review;
   final bool loading;
@@ -76,7 +78,7 @@ class ContestEntryState {
 
   ContestEntryState copyWith({
     ContestDetailModel? contest,
-    List<Question>? questions,
+    List<ContestQuestion>? questions,
     int? currentIndex,
     bool? review,
     bool? loading,
@@ -118,11 +120,14 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
   ContestEntryNotifier({required this.ref})
     : super(
         ContestEntryState(
-          contest: ref.read(contestProvider).selectedContest!,
+          contest:
+              ref
+                  .read(currentContestProvider)
+                  .contest!, //use a custom contestProvider to make it total independant to register or live screen launches:
           questions: [],
           currentIndex: 0,
           review: false,
-          answerMap: {},
+          answerMap: {}, // need this for the free contest: to reflect in ui:
           loading: false,
           // error: true,
           submit: ContestSubmission.none,
@@ -142,10 +147,13 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
     state = state.copyWith(loading: true, error: false);
     // return;
     try {
-      final questions = await ContestRepository.getContestQuestions(
+      final responseBody = await ContestRepository.getContestQuestions(
         id: state.contest.id,
       );
-
+      final List<dynamic> data = jsonDecode(responseBody);
+      final questions = data.map((q) => ContestQuestion.fromJson(q)).toList();
+      // simple suffle
+      questions.shuffle();
       if (questions.isEmpty) {
         throw 'No question Available';
       }
@@ -356,7 +364,7 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
   // submitting answer marked lasted question time : questionPage -> submissionPage:
 
   //   // free contest submission
-  void contestSubmission(ContestSubmission submit) {
+  void contestSubmission(ContestSubmission submit) async {
     // take current index and update final answer time if submit is not intruppted
     if (state.questions.isEmpty) {
       state = state.copyWith(submit: ContestSubmission.submit);
@@ -366,12 +374,16 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
       state = state.copyWith(submit: submit);
       return;
     }
+
+    ///time out state: or submit
+    /// can be utilise to get the last attempted question or time of moving to submission page:
     final now = DateTime.now().toUtc();
     final answer = currentAnswer();
     if (answer == null) {
-      debugPrint('Exception found current answer is not while submitting');
+      debugPrint('Exception found current answer is null, during submitting');
       return;
     }
+
     // updating the final question
     answerMap[currentQuestionId(state.currentIndex)] = Answer(
       questionID: answer.questionID,
@@ -381,16 +393,27 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
       startAt: questionStartAt!,
       endAt: now,
     );
-    debugPrint(
-      'submission called: ${answerMap.map((key, value) => MapEntry(key, value.toJson().toString())).toString()}',
-    );
+    // debugPrint(
+    //   'submission called: ${answerMap.map((key, value) => MapEntry(key, value.toJson().toString())).toString()}',
+    // );
 
     state = state.copyWith(answerMap: answerMap, submit: submit);
   }
 
   // unifrom contest submission:
 
-  void unifromContestSubmission() {
+  void unifromContestSubmission(ContestSubmission submission) {
+    if (state.questions.isEmpty) {
+      state = state.copyWith(submit: ContestSubmission.submit);
+      return;
+    }
+    if (submission == ContestSubmission.interrupted) {
+      state = state.copyWith(submit: ContestSubmission.interrupted);
+      return;
+    }
+
+    //timeout or submit state:
+
     questionStartAt = DateTime.now().toUtc();
     // answer can't be null:
     final answer = currentAnswer();
@@ -401,6 +424,7 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
     answerMap[currentQuestionId(state.currentIndex)] = answer.copyWith(
       endAt: questionStartAt,
     );
+    debugPrint('last quetion submission');
     state = state.copyWith(
       answerMap: answerMap,
       submit: ContestSubmission.submit,
@@ -409,15 +433,32 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
 
   // / Answers persistency:
   // persist answer in case of submit failure or violation:
-  Future<void> persistAnswers() async {
+  Future<void> persistAnswers({required TimeDistribution contestType}) async {
     // try to persist only the anwered value:
-    final jsonAnswer = jsonEncode(
-      answerMap.values
-          .where((a) => a.optionID != null)
-          .where((a) => a.endAt != null) // keep only answers with optionID
-          .map((a) => a.toJson())
-          .toList(),
-    );
+
+    final String jsonAnswer;
+    switch (contestType) {
+      case TimeDistribution.free:
+        jsonAnswer = jsonEncode(
+          answerMap.values
+              .where(
+                (a) => a.optionID != null,
+              ) // keep only answers with optionID
+              .map((a) => a.toJson())
+              .toList(),
+        );
+        break;
+      case TimeDistribution.uniform:
+        jsonAnswer = jsonEncode(
+          answerMap.values
+              .where((a) => a.optionID != null)
+              .where((a) => a.endAt != null) // keep only answers with optionID
+              .map((a) => a.toJson())
+              .toList(),
+        );
+        break;
+    }
+
     debugPrint(jsonAnswer);
     try {
       await ContestRepository.persistAnswers(
@@ -437,9 +478,35 @@ class ContestEntryNotifier extends StateNotifier<ContestEntryState> {
     }
   }
 
-  Future<void> submitAnswers() async {
+  Future<String> submitAnwsers() async {
     try {
-      await ContestRepository.postContestSubmit(id: state.contest.id);
+      final responseBody = await ContestRepository.postContestSubmit(
+        id: state.contest.id,
+      );
+      final response = await jsonDecode(responseBody);
+
+      final (source, contest) = ref.read(
+        currentContestProvider.select((e) => (e.source, e.contest)),
+      );
+      if (contest == null || source == null) {
+        throw Exception('contest source Exception');
+      }
+      final updatedContest = contest.copyWith(
+        currentStage: ContestStage.submitted,
+      );
+
+      if (source == ContestSource.live) {
+        ref
+            .read(contestProvider.notifier)
+            .updateContest(contest: updatedContest);
+      }
+      ref
+          .read(participateProvider.notifier)
+          .upsertParticipate(id: contest.id, contest: updatedContest);
+
+      return response['detail'] ?? 'Successfull';
+    } on Exception {
+      throw 'Something went wrong';
     } catch (e) {
       rethrow;
     }
@@ -473,8 +540,7 @@ final contestStartProvider = StateProvider.autoDispose<bool>((ref) {
   final clock = ref.watch(globalClockProvider);
   final contest = ref.read(contestEntryProvider).contest;
 
-  return clock.add(Duration(seconds: 1)).difference(contest.startAt) >
-      Duration.zero;
+  return clock.difference(contest.startAt) > Duration.zero;
 });
 
 /// ---------- 3. Question Timer ----------
@@ -528,12 +594,15 @@ class QuestionTimerNotifier extends StateNotifier<QuestionTimerState> {
     if (index >= entry.questions.length) {
       // move to next section
 
-      // before submission we need to update persist answer:
-      entryNotifier.persistAnswers();
+      // first update the time then persist for the future refrence:
+      entryNotifier.unifromContestSubmission(
+        ContestSubmission.submit,
+      ); // in the case of quetion timer we move forward to submit so user we'll submit asap he is completed all the previous questions:
+
+      // we need to update persist answer:
+      entryNotifier.persistAnswers(contestType: entry.contest.timeDistribution);
       // quit or submit
 
-      entryNotifier
-          .unifromContestSubmission(); // in the case of quetion timer we move forward to submit so user we'll submit asap he is completed all the previous questions:
       state = state.copyWith(
         questionEndAt: null,
         questionRemaining: Duration.zero,
@@ -541,7 +610,8 @@ class QuestionTimerNotifier extends StateNotifier<QuestionTimerState> {
       return;
     }
 
-    final now = ref.read(globalClockProvider);
+    final now =
+        ref.read(globalClockProvider).toUtc(); // this clock is in local time:
     // this minus one avoid start one seconds and count zero as full second.
     final durationSeconds =
         (entry.contest.timeDuration.inSeconds / entry.questions.length as num)
@@ -597,8 +667,8 @@ final dndProvider = StreamProvider.autoDispose<DndFilter>((ref) {
   return DndService.dndFilterStream;
 });
 
-final pinProvider = StreamProvider.autoDispose<PinState>((ref) async* {
-  await PinService.setMonitorState(true);
-  await PinService.getStatus();
-  yield* PinService.pinEvents;
-});
+// final pinProvider = StreamProvider.autoDispose<PinState>((ref) async* {
+//   await PinService.setMonitorState(true);
+//   await PinService.getStatus();
+//   yield* PinService.pinEvents;
+// });

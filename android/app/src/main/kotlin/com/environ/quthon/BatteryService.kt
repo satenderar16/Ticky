@@ -2,7 +2,6 @@ package com.environ.quthon
 
 import android.content.*
 import android.os.BatteryManager
-import android.os.Build
 import android.util.Log
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -13,7 +12,7 @@ class BatteryService(private val context: Context) : EventChannel.StreamHandler 
     companion object {
         private const val CHANNEL = "com.environ.quthon/battery"
 
-        fun registerWith(engine: FlutterEngine, context: Context) {
+        fun registerWith(engine: FlutterEngine, context: Context) { 
             EventChannel(engine.dartExecutor.binaryMessenger, CHANNEL)
                 .setStreamHandler(BatteryService(context))
         }
@@ -23,13 +22,16 @@ class BatteryService(private val context: Context) : EventChannel.StreamHandler 
     private var batteryReceiver: BroadcastReceiver? = null
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        // Already listening? Skip to prevent double registration
+        // Only listen if not already listening
         if (batteryReceiver != null) return
 
         eventSink = events
 
         batteryReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                // Only send events if Dart is still listening
+                if (eventSink == null) return
+
                 val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
                 val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
                 val health = intent.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)
@@ -46,35 +48,40 @@ class BatteryService(private val context: Context) : EventChannel.StreamHandler 
                     else -> "Other"
                 }
 
-                // Build JSON object
                 val json = JSONObject()
                 json.put("level", level)
                 json.put("charging", isCharging)
                 json.put("health", healthStr)
 
                 try {
-                    eventSink?.success(json.toString())
+                    if(eventSink !=null){
+                          eventSink?.success(json.toString())
+                    }
+                  
                 } catch (e: IllegalStateException) {
-                    // Flutter engine detached — stop updates
+                    // Flutter detached — stop listening
                     Log.w("BatteryService", "Flutter detached, stopping updates.")
-                    try { context.unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
-                    batteryReceiver = null
-                    eventSink = null
+                    unregisterReceiverSafe()
                 }
             }
         }
 
+        // Register receiver only when Dart subscribes
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         context.registerReceiver(batteryReceiver, filter)
     }
 
     override fun onCancel(arguments: Any?) {
+        unregisterReceiverSafe()
+        eventSink = null
+    }
+
+    private fun unregisterReceiverSafe() {
         try {
             batteryReceiver?.let { context.unregisterReceiver(it) }
         } catch (e: Exception) {
             Log.w("BatteryService", "Receiver already unregistered: $e")
         }
         batteryReceiver = null
-        eventSink = null
     }
 }

@@ -1,28 +1,38 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:quthon/Auth/user_model.dart';
-import 'auth_repository.dart';
+import 'package:quthon/Repository/auth_repository.dart';
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 
+//enum for session:
+enum AuthSession { expired, signedIn, none }
+
 // Container AuthNotifier and AuthState:
+
+final authNotifierProvider = StateNotifierProvider<AuthNotifier, AuthState>((
+  ref,
+) {
+  final repo = AuthRepository.instance!;
+  return AuthNotifier.initial(repository: repo, user: repo.user);
+});
 
 class AuthState {
   final User? user;
-  final String? sessionExpired;
+  final AuthSession sessionExpired;
 
-  const AuthState({this.user, this.sessionExpired});
+  const AuthState({this.user, required this.sessionExpired});
 
   bool get isAuthenticated => user != null;
 
   /// logged out or fresh Start
   factory AuthState.unauthenticated() =>
-      const AuthState(user: null, sessionExpired: null);
+      const AuthState(user: null, sessionExpired: AuthSession.none);
 
   // logged in
   factory AuthState.authenticated(User user) =>
-      AuthState(user: user, sessionExpired: null);
+      AuthState(user: user, sessionExpired: AuthSession.signedIn);
 
-  AuthState copyWith({User? user, String? sessionExpired}) {
+  AuthState copyWith({User? user, AuthSession? sessionExpired}) {
     return AuthState(
       user: user ?? this.user,
       sessionExpired: sessionExpired ?? this.sessionExpired,
@@ -45,15 +55,17 @@ class AuthNotifier extends StateNotifier<AuthState> {
             : AuthState.unauthenticated(),
       ) {
     // Listen to access token changes after system calls update it :
-    globalAccessExpiryNotifier.addListener(() {
-      final newExpiry = globalAccessExpiryNotifier.value;
-      if (newExpiry != null) {
-        scheduleRefresh(accessTime: newExpiry);
-      }
+    globalauthRefreshNotifier.addListener(() {
+      debugPrint('yes global acessExpiry also called');
+      sessionChecker();
     });
   }
 
-  Future<void> signIn({
+  void updateUser({required User user}) {
+    state = state.copyWith(user: user);
+  }
+
+  Future<User> signIn({
     String? email,
     required String password,
     String? username,
@@ -64,43 +76,58 @@ class AuthNotifier extends StateNotifier<AuthState> {
         password: password,
         username: username,
       );
-      final accessTime = repository.accessTokenExpiry;
-      if (accessTime == null) {
-        throw Exception(
-          "access token expiry found null after sign is complete",
-        );
+      debugPrint('just received the data for repo to notifier');
+      final token = repository.refreshTokenExpiry;
+      if (token == null) {
+        debugPrint('helo there is you');
+        throw Exception(" token expiry found null after sign is complete");
       }
 
       /// updating auth state so we can utilize schedule for access token refresh:
       state = AuthState.authenticated(user);
-
+      return user;
       // assigned a listener which listen the current asses token value:
-      await scheduleRefresh(accessTime: accessTime);
-    } catch (e) {}
+      // await scheduleRefresh();
+    } on Exception {
+      throw 'Something went wrong';
+    } catch (e) {
+      rethrow;
+    }
   }
 
-  /// todo :successfull signup lead to login page.
   Future<User?> signUp({
     required String firstName,
     required String lastName,
     required String email,
     required String password,
   }) async {
-    final user = await repository.signUp(
-      firstName: firstName,
-      lastName: lastName,
-      email: email,
-      password: password,
-    );
-    return user;
+    try {
+      final user = await repository.signUp(
+        firstName: firstName,
+        lastName: lastName,
+        email: email,
+        password: password,
+      );
+      if (user == null) {
+        throw Exception('signUp user exception ');
+      }
+      return user;
+    } on Exception {
+      throw 'Something went wrong';
+    } catch (e) {
+      rethrow;
+    }
   }
 
   Future<void> signOut() async {
     // we are throw error to UI function to show :already hanlde in repository
-
-    await repository.signOut();
-    state = AuthState.unauthenticated();
-    _timer?.cancel();
+    try {
+      await repository.signOut();
+      state = AuthState.unauthenticated();
+      _timer?.cancel();
+    } catch (e) {
+      rethrow;
+    }
   }
 
   // session expiry user update state:
@@ -108,85 +135,124 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = AuthState.unauthenticated();
   }
 
-  /// Schedule a refresh 30s before [accessTime]
-  Future<void> scheduleRefresh({
-    required DateTime accessTime,
-    int retryInterval = 5,
-  }) async {
-    // Cancel existing timer if running
-    _timer?.cancel();
-    // when user signout in the middle of schedule Refresh and assign some data to storage :
-
-    // might have this condition in one in million as
-
+  /// sessionChecker
+  ///
+  void sessionChecker() async {
     if (state == AuthState.unauthenticated()) {
       debugPrint("unauthenticated schedule cancelling for future");
       await repository.deleteTokens();
       await repository.deleteUser();
+
       return;
     }
-    final durationUntilExpiry = accessTime.difference(DateTime.now().toUtc());
 
-    // Schedule 30s before expiry
+    final now = DateTime.now().toUtc();
+
+    final accessTime = repository.accessTokenExpiry ?? now;
+    final durationUntilExpiry = accessTime.difference(now);
+
     Duration refreshBefore = durationUntilExpiry - const Duration(seconds: 30);
-    debugPrint("time to refresh is : $refreshBefore");
+
+    /// look for the refresh token:
     if (refreshBefore.isNegative) {
-      // this ensure the instant session expiry as user hit the limit:
       final refreshExpiry = repository.refreshTokenExpiry;
 
       if (refreshExpiry == null ||
-          refreshExpiry.difference(DateTime.now().toUtc()).inSeconds < 30) {
+          refreshExpiry.difference(now).inSeconds < 30) {
         // or we can pop up session expiry pop for better ux:
-        state = state.copyWith(sessionExpired: "Session Expired");
+        // this pop up the re-login dialog:
+        state = state.copyWith(sessionExpired: AuthSession.expired);
+
+        // none of this gonna reflect changes on auth_notifier state:
+
         await repository.deleteTokens();
         await repository.deleteUser();
 
         return;
       }
-      try {
-        final expiry = await repository.refreshTokens(
-          autoRefresh: true,
-        ); // api call return access token time:
-        refreshBefore =
-            expiry!.difference(DateTime.now().toUtc()) - Duration(seconds: 30);
-      } catch (e) {
-        if (e.toString().contains('Session Expiry')) {
-          // token already delete in repositor refresToken then this Exception :
-          state = state.copyWith(sessionExpired: 'Session Expiry');
-        }
-        debugPrint(
-          "access token found to be negative tries fetch but got error: $e",
-        );
-        _timer = Timer(Duration(seconds: retryInterval), () async {
-          await scheduleRefresh(
-            accessTime: accessTime,
-          ); // retry with same expiry
-        });
-        return;
-      }
     }
-    // this will not block the thread, event loop handle it:
-    _timer = Timer(refreshBefore, () async {
-      try {
-        final expiry = await repository.refreshTokens(autoRefresh: true);
-        await scheduleRefresh(accessTime: expiry!);
-      } catch (e) {
-        debugPrint("timer and scheduled refresh error: $e");
-        _timer = Timer(Duration(seconds: retryInterval), () async {
-          await scheduleRefresh(
-            accessTime: accessTime,
-          ); // retry with same expiry
-        });
-      }
-    });
   }
 
-  // when user resume app , it resycn schedule refresh with app state and if session expires refetch it:
-  Future<void> reSyncScheduleRefresh({int interval = 5}) async {
-    final accessExpiry = repository.accessTokenExpiry;
-    if (accessExpiry == null) {
-      return; // case when user pause the state while on login screen :
-    }
-    await scheduleRefresh(accessTime: accessExpiry, retryInterval: interval);
-  }
+  // /// Schedule a refresh 30s before [accessTime]
+  // Future<void> scheduleRefresh({
+  //   // required DateTime accessTime,
+  //   int retryInterval = 5,
+  // }) async {
+  //   // Cancel existing timer if running
+  //   _timer?.cancel();
+  //   // when user signout in the middle of schedule Refresh and assign some data to storage :
+
+  //   // might have this condition in one in million as
+
+  //   if (state == AuthState.unauthenticated()) {
+  //     debugPrint("unauthenticated schedule cancelling for future");
+  //     await repository.deleteTokens();
+  //     await repository.deleteUser();
+  //     _timer?.cancel();
+  //     return;
+  //   }
+  //   final now = DateTime.now().toUtc();
+
+  //   final accessTime = repository.accessTokenExpiry ?? now;
+  //   final durationUntilExpiry = accessTime.difference(now);
+
+  //   // Schedule 30s before expiry
+  //   Duration refreshBefore = durationUntilExpiry - const Duration(seconds: 30);
+  //   debugPrint("time to refresh is : $refreshBefore");
+  //   if (refreshBefore.isNegative) {
+  //     // this ensure the instant session expiry as user hit the limit:
+  //     final refreshExpiry = repository.refreshTokenExpiry;
+
+  //     if (refreshExpiry == null ||
+  //         refreshExpiry.difference(now).inSeconds < 30) {
+  //       // or we can pop up session expiry pop for better ux:
+  //       state = state.copyWith(sessionExpired: AuthSession.expired);
+  //       await repository.deleteTokens();
+  //       await repository.deleteUser();
+
+  //       return;
+  //     }
+  //     try {
+  //       final expiry = await repository.refreshTokens(
+  //         autoRefresh: true,
+  //       ); // api call return access token time:
+  //       refreshBefore =
+  //           expiry!.difference(DateTime.now().toUtc()) - Duration(seconds: 30);
+  //     } catch (e) {
+  //       if (e.toString().contains('Session')) {
+  //         // token already delete in repositor refresToken then this Exception :
+  //         state = state.copyWith(sessionExpired: AuthSession.expired);
+  //         _timer?.cancel();
+  //       }
+  //       debugPrint(
+  //         "access token found to be negative tries fetch but got error: $e",
+  //       );
+  //       _timer = Timer(Duration(seconds: retryInterval), () async {
+  //         await scheduleRefresh(); // retry with same expiry
+  //       });
+  //       return;
+  //     }
+  //   }
+  //   // this will not block the thread, event loop handle it:
+  //   _timer = Timer(refreshBefore, () async {
+  //     try {
+  //       await repository.refreshTokens(autoRefresh: true);
+  //       await scheduleRefresh();
+  //     } catch (e) {
+  //       debugPrint("timer and scheduled refresh error: $e");
+  //       _timer = Timer(Duration(seconds: retryInterval), () async {
+  //         await scheduleRefresh(); // retry with same expiry
+  //       });
+  //     }
+  //   });
+  // }
+
+  // // when user resume app , it resycn schedule refresh with app state and if session expires refetch it:
+  // Future<void> reSyncScheduleRefresh({int interval = 5}) async {
+  //   final accessExpiry = repository.accessTokenExpiry;
+  //   if (accessExpiry == null) {
+  //     return; // case when user pause the state while on login screen :
+  //   }
+  //   await scheduleRefresh(retryInterval: interval);
+  // }
 }
